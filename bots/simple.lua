@@ -6,7 +6,7 @@ ip,port,myid = ...
 print("Started")
 
 local server = assert(socket.connect(ip, port))
-print("connected to localhost:",port)
+print("connected to:",ip,port)
 
 -- The server should send data fairly often, but in case something goes wrong
 server:settimeout(3)
@@ -16,6 +16,7 @@ local ready = false
 
 local x,y =10,10
 local px,py = 0, 0
+
 
 local function updatePellet(msg)
 	px,py = msg:match("p (%d+),(%d+)")
@@ -40,6 +41,7 @@ local function sendResponse()
 	elseif y < py then	cmd = "d"
 	elseif y > py then	cmd = "u"
 	end	
+	
 	server:send(cmd)
 end
 

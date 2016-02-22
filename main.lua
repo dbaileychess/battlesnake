@@ -139,6 +139,7 @@ local function broadCastPellet()
 end
 
 local function broadCastStarting()
+	broadCast(string.format("bi %d,%d",width,height))	
 	broadCastPellet()
 	
 	for snake in pairs(activeSnakes) do
@@ -246,7 +247,7 @@ local function startGame(gameNumber)
 	end
 	
 	-- for brevity, active snakes
-	activeSnakes = board.snakes
+	activeSnakes = board.liveSnakes
 	
 	-- keep track of clients 
 	clients = {}
@@ -427,7 +428,8 @@ function love.load()
 	isSinglePlayer = numOfSnakes == 1
 	
 	-- create the match
-	match = Snake.NewMatch(config.bestOf, seed, config.snakes)
+	match = Snake.NewMatch(config.bestOf, seed, 
+		config.snakes, config.matchWinner,config.lastManStanding, config.pelletPoints, config.tickPoints)
 	
 	-- Start the first game of the match
 	startGame(1)

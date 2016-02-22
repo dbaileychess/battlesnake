@@ -13,11 +13,12 @@ function board.New(width, height, perserveDead)
 	setmetatable(o, {__index = board})
 	o.width = width
 	o.height = height
-	o.snakes = {}
+	o.liveSnakes = {}
 	o.deadSnakes = {}
 	o.perserveDead = perserveDead
 	o.ticks = 0
 	o.pelletsEaten = 0
+	o.allSnakes = {}
 	
 	-- init board	
 	for i = 1, width do
@@ -85,88 +86,88 @@ function board:AddSnake(snake)
 	end
 	
 	-- save the snake
-	self.snakes[snake] = snake
+	self.liveSnakes[snake] = snake	
+	self.allSnakes[snake.id] = snake
 end
 
 function board:SnakesLeft()
 	local tbl = {}
-	for snake,_ in pairs(self.snakes) do
+	for snake,_ in pairs(self.liveSnakes) do
 		tbl[#tbl+1] = snake
 	end
 	return tbl
 end
 
+-- main game mechanics for a turn
 function board:UpdateTick()	
 	self.ticks = self.ticks + 1
 	self.removedThisTick = {}
-	local sameTurnCollision = false
 	local collidingSnakes = {}
 	local updates = {}
 	
 	-- get the next move for each snake
-	for _,snake in pairs(self.snakes) do		
-		local status, err = pcall(function () 
-			local direction = snake:GetMovement()
-			if not direction then return end
-			local x,y = snake:Move(direction)
-			
-			-- check for collisions of each snake moving into the same position at the same time
-			for otherSnake,location in pairs(updates) do
-				if location.x == x and location.y == y then
-					collidingSnakes[snake] = {x=x, y=y}
-					collidingSnakes[otherSnake] = {x=x, y=y}
-					sameTurnCollision = true
-				end
-			end
-			
-			updates[snake] = {x = x, y = y}
-		end)	
-		assert(status, err)
+	for _,snake in pairs(self.liveSnakes) do				
+		local direction = assert(snake:GetMovement(), "Didn't get valid movement from snake!")
+		local x,y = snake:Move(direction)
 		
+		-- check for collisions of each snake moving into the same position at the same time
+		for otherSnake,location in pairs(updates) do
+			if location.x == x and location.y == y then
+				collidingSnakes[snake] = {x=x, y=y}
+				collidingSnakes[otherSnake] = {x=x, y=y}
+			end
+		end
+		
+		updates[snake] = {x = x, y = y}		
 	end		
 	
 	local pelletEaten = false
 	
-	if not sameTurnCollision then
-		-- now we apply each movement per snake, order doesn't matter becuase they didn't
-		-- reach the same spot this turn
-		for snake,location in pairs(updates) do
-			local x,y = location.x, location.y
-			
-			if self:IsPellet(x,y) then
-				self.pelletsEaten = self.pelletsEaten + 1 
-				snake:Eat() -- reward the snake!						
-				pelletEaten = true
-			elseif not self:IsEmpty(x,y) then				
-				self:RemoveSnake(snake) -- kill the snake!
-				goto continue
-			end
-			
-			-- update the board with the new information
-			-- this effectively removes the pellet as well
-			self:SetSpot(x,y,snake)
-			
-			-- tell the snake to grow
-			local tx,ty = snake:Grow(x,y)
-			
-			-- update the board with removing the tail
-			if tx and ty then
-				self:ClearSpot(tx, ty)
-			end
-			
-			::continue::
-		end
-	else		
-		for snake, location in pairs(collidingSnakes) do
-			local x,y = location.x, location.y
-			if self:IsPellet(x,y) then													
-				self:ClearSpot(x,y)
-				pelletEaten = true -- still get rid of the pellet
-			end
-			self:RemoveSnake(snake)
-		end
-	end	
+	-- now we apply each movement per snake that didn't collide
+	for snake,location in pairs(updates) do
 		
+		-- skip colliding snakes
+		-- we will handle below
+		if collidingSnakes[snake] then
+			goto continue
+		end
+		
+		local x,y = location.x, location.y
+		
+		if self:IsPellet(x,y) then
+			self.pelletsEaten = self.pelletsEaten + 1 
+			snake:Eat() -- reward the snake!						
+			pelletEaten = true
+		elseif not self:IsEmpty(x,y) then				
+			self:RemoveSnake(snake) -- kill the snake!
+			goto continue
+		end
+		
+		-- update the board with the new information
+		-- this effectively removes the pellet as well
+		self:SetSpot(x,y,snake)
+		
+		-- tell the snake to grow
+		local tx,ty = snake:Grow(x,y)
+		
+		-- update the board with removing the tail
+		if tx and ty then
+			self:ClearSpot(tx, ty)
+		end
+		
+		::continue::
+	end
+	
+	-- handle any colliding snakes (same spot same turn)
+	for snake, location in pairs(collidingSnakes) do
+		local x,y = location.x, location.y
+		if self:IsPellet(x,y) then													
+			self:ClearSpot(x,y)
+			pelletEaten = true -- still get rid of the pellet
+		end
+		self:RemoveSnake(snake)
+	end
+			
 	-- generate a new pellet location
 	-- and inform the snakes
 	if pelletEaten then
@@ -194,9 +195,10 @@ function board:RemoveSnake(snake)
 	self.removedThisTick[#self.removedThisTick+1] = snake
 	
 	snake.isDead = true
+	snake.ticks = self.ticks
 	
 	-- remove the snake from the list of active snakes
-	self.snakes[snake] = nil
+	self.liveSnakes[snake] = nil
 	
 	-- add to the list of dead snakes (for scoring)
 	self.deadSnakes[#self.deadSnakes + 1] = snake
@@ -209,13 +211,6 @@ function board:RemoveSnake(snake)
 	for pos in snake:Iter() do
 		self:ClearSpot(pos.x, pos.y)
 	end
-	
---	-- update the board positions
---	local pos = snake:GetHead()
---	repeat
---		self:SetSpot(pos.x, pos.y, nil)
---		pos = pos.bck
---	until pos == nil
 end
 
 local snake = {}
@@ -232,9 +227,6 @@ function snake.New(name, id, growth, initialLength, color)
 	o.currentMovement = "r"
 	o.color = color
 	o.initialLength = initialLength or 3
-	
-	--o.head,o.tail = generateSnakeBody(x, y, o.initialLength)
-	
 	return o
 end
 
@@ -327,7 +319,7 @@ end
 
 local match = {}
 
-function match.New(bestOf, seed, snakes) 
+function match.New(bestOf, seed, snakes, matchpoints, lmspoints, ppoints, tpoints) 
 	local o = {}
 	setmetatable(o, {__index = match})
 	o.bestOf = bestOf or 1	
@@ -336,10 +328,15 @@ function match.New(bestOf, seed, snakes)
 	o.games = {}
 	o.snakeWins = {}
 	o.snakes = snakes
+	o.matchPoints = matchpoints
+	o.lastManStandingPoints = lmspoints
+	o.pelletPoints = ppoints
+	o.tickPoints = tpoints
 	return o;
 end
 
 function match:StartGame(gameNumber)
+	-- create the game table
 	self.games[gameNumber] = {}
 end
 
@@ -349,7 +346,8 @@ function match:EndGame(gameNumber, board, aliveSnakes)
 		return false
 	end	
 		
-	local winningSnake	
+	local lastSnakeLiving
+	local singlePlayer
 		
 	-- multiple snakes died this turn, check for tie condition
 	if #board.removedThisTick > 1 then
@@ -360,7 +358,7 @@ function match:EndGame(gameNumber, board, aliveSnakes)
 		for i, snake in ipairs(board.removedThisTick) do
 			local p = snake:GetPelletsEaten()
 			if p > mostPellets then
-				winningSnake = snake
+				lastSnakeLiving = snake
 				mostPellets = p
 				tiedForMost = false
 			elseif p == mostPellets then
@@ -374,22 +372,51 @@ function match:EndGame(gameNumber, board, aliveSnakes)
 			return false
 		end	
 	elseif #aliveSnakes == 1 then
-		winningSnake = aliveSnakes[1] -- get the sole survivor
+		lastSnakeLiving = aliveSnakes[1] -- get the sole survivor
 	else
-		winningSnake = board.deadSnakes[1] -- get the sole dead person
+		singlePlayer = true
+		lastSnakeLiving = board.deadSnakes[1] -- get the sole dead person, for single player
 	end
 	
 	-- sanity check
-	if not winningSnake then
-		return false		
-	end
+--	if not lastSnakeLiving then
+--		return false		
+--	end
 	
 	local gameTbl = self.games[gameNumber]	
+	
+	-- calculate the scores per snake
+	local maxScore = -1
+	local winningSnake = lastSnakeLiving
+	gameTbl.scores = {}	
+	for id,snakeName in ipairs(self.snakes) do
+		local snake = board.allSnakes[id]
+		
+		local score = 0
+		
+		-- last man standing is for multiple player only
+		if not singlePlayer and lastSnakeLiving.id == id then
+			score = score + self.lastManStandingPoints
+		end
+		
+		score = score + snake:GetPelletsEaten() * self.pelletPoints
+		score = score + (snake.ticks or board.ticks) * self.tickPoints		
+		
+		-- save score
+		gameTbl.scores[id] = score
+		
+		-- find max score
+		if score > maxScore then
+			maxScore = score
+			winningSnake = snake
+		end
+	end
+	
 	gameTbl.winnerID = winningSnake.id
 	gameTbl.winnerPellets = winningSnake:GetPelletsEaten()
 	gameTbl.ticks = board.ticks
 	gameTbl.totalPellets = board.pelletsEaten
-	
+		
 	-- record the win
 	self.snakeWins[winningSnake.id] = (self.snakeWins[winningSnake.id] or 0 )+ 1	
 	
@@ -398,9 +425,10 @@ function match:EndGame(gameNumber, board, aliveSnakes)
 end
 
 function match:IsThereAWinner()
+	-- todo figure this out for multiplayer
 	for snake,i in pairs(self.snakeWins) do
 		if i >= self.toWin then
-			return true, snake,i
+			return true, snake, i
 		end
 	end
 	return false
@@ -408,22 +436,54 @@ end
 
 function match:WriteResults(filePath, mode)
 	local f = assert(io.open(filePath, mode))
-	f:write("==Match Results==\n")
+	
+	-- Sum scores
+	local totalScores = {}		
+	for id,snake in ipairs(self.snakes) do
+		local score = 0
+		for _,game in ipairs(self.games) do
+			score = score + (game.scores and game.scores[id] or 0)
+		end
+		totalScores[id] = score
+--		f:write(string.format(" Snake %s ID: %d Score: %d\n",
+--			self.snakes[id],
+--			id,
+--			score))
+	end
+	
+	-- find the match winner and give them the match points
+	local _,winningSnakeID,wins = self:IsThereAWinner()	
+	totalScores[winningSnakeID] = totalScores[winningSnakeID] + self.matchPoints
+	
+	-- now find the overall winner
+	table.sort(totalScores, function(a,b) return a > b end)
+		
+	f:write("==Match Settings==\n")
 	f:write(" Best Of "..self.bestOf.."\n")
 	f:write(" Seed "..self.seed.."\n")
 	
-	local _,winningSnakeID,wins = self:IsThereAWinner()
-	f:write(string.format(" Snake %s ID: %d Won with %d wins!\n",
-			self.snakes[winningSnakeID],
-			winningSnakeID,
-			wins))
+	f:write("==Snake Scores==\n")
+	local rank = 1
+	for id,score in pairs(totalScores) do
+		f:write(string.format("#%d: %s [%d] Score: %d\n",
+			rank,
+			self.snakes[id],
+			id,
+			score))
+		rank = rank + 1
+	end
 	
 	
+--	f:write(string.format(" Snake %s ID: %d Won with %d wins!\n",
+--			self.snakes[winningSnakeID],
+--			winningSnakeID,
+--			wins))
+		
 	f:write("==By Round==\n")
 	for i,gameRes in ipairs(self.games) do
 		
 		if not gameRes.winnerID then
-			f:write(string.format( "Round: %d Tie!\n", i))
+			f:write(string.format(" Round: %d Tie!\n", i))
 		else		
 			f:write(string.format(" Round: %d Winner: %s ID: %d Pellets: %d Total Ticks: %d\n", 
 				i, 				
